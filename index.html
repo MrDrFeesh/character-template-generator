@@ -17,7 +17,10 @@
 <body class="min-h-full bg-stone-50 text-stone-900">
   <div id="root"></div>
 
-  <script type="text/javascript">
+  <!-- Babel (so we can use JSX in the browser) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
     const { useState, useMemo, useEffect } = React;
 
     function Section({ title, children, aside }) {
