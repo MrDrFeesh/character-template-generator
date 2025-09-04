@@ -45,14 +45,27 @@
       );
     }
 
-    const defaultStats = {
-      health: 5000,
+    const survivorDefaults = {
+      health: 100,
       stamina: 100,
+      staminaGain: 20,
+      staminaDrain: 10,
+      walkspeed: 12,
+      sprintspeed: 26,
+      terror: 0,
+    };
+
+    const killerDefaults = {
+      health: 1000,
+      stamina: 110,
       staminaGain: 21,
       staminaDrain: 9.5,
-      walkspeed: 8,
+      walkspeed: 9,
       sprintspeed: 28,
+      terror: 60,
     };
+
+    const defaultStats = survivorDefaults;
 
     const abilityLabels = ["Q", "E", "R", "T"]; // order mapping
 
@@ -65,7 +78,7 @@
       const [cost, setCost] = useState(0);
       const [description, setDescription] = useState("");
       const [difficulty, setDifficulty] = useState(3); // 1..5
-      const [stats, setStats] = useState(defaultStats);
+      const [stats, setStats] = useState(defaultStats); // includes .terror (0 for survivors, 60 for killers)
 
       const [hasPassive, setHasPassive] = useState(false);
       const [passiveName, setPassiveName] = useState("");
@@ -74,13 +87,16 @@
       const [m1Name, setM1Name] = useState("");
       const [m1CD, setM1CD] = useState(2);
       const [m1Desc, setM1Desc] = useState("");
+      const [m1Windup, setM1Windup] = useState(0.2);
+      const [m1Damage, setM1Damage] = useState(20);
+      const [m1Linger, setM1Linger] = useState(0.25);
 
       const [abilityCount, setAbilityCount] = useState(1); // 1..4
       const [abilities, setAbilities] = useState([
-        { key: "Q", name: "", cd: "", desc: "" },
-        { key: "E", name: "", cd: "", desc: "" },
-        { key: "R", name: "", cd: "", desc: "" },
-        { key: "T", name: "", cd: "", desc: "" },
+        { key: "Q", name: "", cd: "", desc: "", hasDamage: false, damage: 0 },
+        { key: "E", name: "", cd: "", desc: "", hasDamage: false, damage: 0 },
+        { key: "R", name: "", cd: "", desc: "", hasDamage: false, damage: 0 },
+        { key: "T", name: "", cd: "", desc: "", hasDamage: false, damage: 0 },
       ]);
 
       const [hasStatuses, setHasStatuses] = useState(false);
@@ -110,11 +126,24 @@
             setM1Name(data.m1Name || "");
             setM1CD(data.m1CD ?? 2);
             setM1Desc(data.m1Desc || "");
+            setM1Windup(data.m1Windup ?? 0.2);
+            setM1Damage(data.m1Damage ?? 20);
+            setM1Linger(data.m1Linger ?? 0.25);
             setAbilityCount(data.abilityCount || 1);
             setAbilities(
               (data.abilities && data.abilities.length)
-                ? abilityLabels.map((k, i) => data.abilities[i] || { key: k, name: "", cd: "", desc: "" })
-                : abilityLabels.map((k) => ({ key: k, name: "", cd: "", desc: "" }))
+                ? abilityLabels.map((k, i) => {
+                    const src = data.abilities[i] || {};
+                    return {
+                      key: k,
+                      name: src.name || "",
+                      cd: src.cd || "",
+                      desc: src.desc || "",
+                      hasDamage: Boolean(src.hasDamage),
+                      damage: src.damage ?? 0,
+                    };
+                  })
+                : abilityLabels.map((k) => ({ key: k, name: "", cd: "", desc: "", hasDamage: false, damage: 0 }))
             );
             setHasStatuses(Boolean(data.hasStatuses));
             setStatusCount(data.statusCount || 1);
@@ -131,7 +160,7 @@
         const payload = {
           name, quote, role, survivorType, killerStyle, cost, description, difficulty, stats,
           hasPassive, passiveName, passiveDesc,
-          m1Name, m1CD, m1Desc,
+          m1Name, m1CD, m1Desc, m1Windup, m1Damage, m1Linger,
           abilityCount, abilities,
           hasStatuses, statusCount, statuses,
         };
@@ -179,6 +208,8 @@
         nl(`Stamina drain per second - ${stats.staminaDrain}`);
         nl(`Walkspeed - ${stats.walkspeed}`);
         nl(`Runspeed - ${stats.sprintspeed}`);
+        if (role === 'Killer') nl(`Terror radius (studs) - ${stats.terror}`);
+        if (role === 'Killer') nl(`Terror radius (studs) - ${stats.terror}`);
         nl("");
         nl("Passives");
         if (hasPassive) {
@@ -192,6 +223,13 @@
         if (role === "Killer") {
           nl(`M1 - ${m1Name || "Name"} (for killers)`);
           nl(`CD - ${m1CD || 2}s`);
+          nl(`Windup - ${m1Windup}s`);
+          nl(`Damage - ${m1Damage}`);
+          nl(`Linger - ${m1Linger}s`);
+          nl(m1Desc || "What the thing does");
+          nl("");
+        } (for killers)`);
+          nl(`CD - ${m1CD || 2}s`);
           nl(m1Desc || "What the thing does");
           nl("");
         }
@@ -200,6 +238,7 @@
           nl(`${key} - ${a.name || "Name"}`);
           nl(`CD - ${a.cd !== "" ? a.cd : "#"}s`);
           nl(a.desc || "What the thing does");
+          if (a.hasDamage) nl(`Damage - ${a.damage}`);
           nl("");
         });
         if (hasStatuses) {
@@ -212,18 +251,162 @@
         return lines.join("\n");
       }, [name, quote, cost, role, survivorType, killerStyle, description, stars, stats, hasPassive, passiveName, passiveDesc, m1Name, m1CD, m1Desc, trimmedAbilities, hasStatuses, statuses]);
 
+      const outputHTML = useMemo(() => {
+        const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const parts = [];
+        const p = (inner) => parts.push(`<p>${inner}</p>`);
+        parts.push(`<h2>${esc(name || 'Name')}</h2>`);
+        p(esc(quote ? `‘${quote}’` : '‘Purchase quote’'));
+        p(`Cost: ${esc(cost || 0)}$`);
+        if (role === 'Survivor') {
+          p(`Type (Survivors): ${esc(survivorType || 'Sustain (survival) / Stunner (stuns/slows killer) / Support (helps team, but weak on their own)')}`);
+        } else {
+          p(`Playstyle (Killers): ${esc(killerStyle || 'Rushdown (kill shit fast) / Ranged (uses projectiles mostly) / Trapper (relies on environment to pick people off) / Wildcard (idfk)')}`);
+        }
+        p(esc(description || 'Description'));
+        p(`Difficulty - ${stars}`);
+        p(`Health - ${stats.health}`);
+        p(`Stamina - ${stats.stamina}`);
+        p(`Stamina gain per second - ${stats.staminaGain}`);
+        p(`Stamina drain per second - ${stats.staminaDrain}`);
+        p(`Walkspeed - ${stats.walkspeed}`);
+        p(`Runspeed - ${stats.sprintspeed}`);
+        if (role === 'Killer') { parts.push(`<p>Terror radius (studs) - ${stats.terror}</p>`); }
+        parts.push('<p><strong>Passives</strong></p>');
+        if (hasPassive) {
+          parts.push(`<h2>${esc(passiveName || 'Name')}</h2>`);
+          p(esc(passiveDesc || 'What the thing does'));
+        } else {
+          p('None');
+        }
+        parts.push('<p><strong>Abilities</strong></p>');
+        if (role === 'Killer') {
+          parts.push(`<h2>M1 - ${esc(m1Name || 'Name')} (for killers)</h2>`);
+          p(`CD - ${m1CD || 2}s`);
+          p(`Windup - ${m1Windup}s`);
+          p(`Damage - ${m1Damage}`);
+          p(`Linger - ${m1Linger}s`);
+          p(esc(m1Desc || 'What the thing does'));
+        }
+        trimmedAbilities.forEach((a, idx) => {
+          const key = abilityLabels[idx];
+          parts.push(`<h2>${key} - ${esc(a.name || 'Name')}</h2>`);
+          p(`CD - ${(a.cd !== '' ? a.cd : '#')}s`);
+          p(esc(a.desc || 'What the thing does'));
+          if (a.hasDamage) { p(`Damage - ${a.damage}`); }
+        });
+        if (hasStatuses) {
+          parts.push('<p><strong>Status Effects</strong></p>');
+          statuses.forEach((s) => {
+            parts.push(`<p><strong>${esc(s.name || 'Name')}</strong></p>`);
+            p(esc(s.desc || 'Description of status effect'));
+          });
+        }
+        return parts.join('
+');
+      }, [name, quote, cost, role, survivorType, killerStyle, description, stars, stats, hasPassive, passiveName, passiveDesc, m1Name, m1CD, m1Desc, trimmedAbilities, hasStatuses, statuses]);
+
+      const outputMD = useMemo(() => {
+        const lines = [];
+        const nl = (s='') => lines.push(s);
+        nl(`## ${name || 'Name'}`);
+        nl(quote ? `‘${quote}’` : '‘Purchase quote’');
+        nl(`Cost: ${cost || 0}$`);
+        if (role === 'Survivor') {
+          nl(`Type (Survivors): ${survivorType || 'Sustain (survival) / Stunner (stuns/slows killer) / Support (helps team, but weak on their own)'}`);
+        } else {
+          nl(`Playstyle (Killers): ${killerStyle || 'Rushdown (kill shit fast) / Ranged (uses projectiles mostly) / Trapper (relies on environment to pick people off) / Wildcard (idfk)'}`);
+        }
+        nl('');
+        nl(description || 'Description');
+        nl('');
+        nl(`Difficulty - ${stars}`);
+        nl(`Health - ${stats.health}`);
+        nl(`Stamina - ${stats.stamina}`);
+        nl(`Stamina gain per second - ${stats.staminaGain}`);
+        nl(`Stamina drain per second - ${stats.staminaDrain}`);
+        nl(`Walkspeed - ${stats.walkspeed}`);
+        nl(`Runspeed - ${stats.sprintspeed}`);
+        nl('');
+        nl('Passives');
+        if (hasPassive) {
+          nl(`## ${passiveName || 'Name'}`);
+          nl(passiveDesc || 'What the thing does');
+        } else {
+          nl('None');
+        }
+        nl('');
+        nl('Abilities');
+        if (role === 'Killer') {
+          nl(`## M1 - ${m1Name || 'Name'} (for killers)`);
+          nl(`CD - ${m1CD || 2}s`);
+          nl(`Windup - ${m1Windup}s`);
+          nl(`Damage - ${m1Damage}`);
+          nl(`Linger - ${m1Linger}s`);
+          nl(m1Desc || 'What the thing does');
+          nl('');
+        }
+        trimmedAbilities.forEach((a, idx) => {
+          const key = abilityLabels[idx];
+          nl(`## ${key} - ${a.name || 'Name'}`);
+          nl(`CD - ${(a.cd !== '' ? a.cd : '#')}s`);
+          nl(a.desc || 'What the thing does');
+          if (a.hasDamage) nl(`Damage - ${a.damage}`);
+          nl('');
+        });
+        if (hasStatuses) {
+          nl('Status Effects');
+          statuses.forEach((s) => {
+            nl(`**${s.name || 'Name'}**`);
+            nl(`${s.desc || 'Description of status effect'}`);
+          });
+        }
+        return lines.join('
+');
+      }, [name, quote, cost, role, survivorType, killerStyle, description, stars, stats, hasPassive, passiveName, passiveDesc, m1Name, m1CD, m1Desc, trimmedAbilities, hasStatuses, statuses]);
+
       function updateStat(key, value) {
         setStats(prev => ({ ...prev, [key]: value }));
       }
 
       function handleAbilityChange(index, field, value) {
         setAbilities(prev => prev.map((a, i) => i === index ? { ...a, [field]: value } : a));
+      } : a));
       }
 
       function copyToClipboard() {
         navigator.clipboard.writeText(output).then(() => {
           alert("Template copied to clipboard!");
         }).catch(() => alert("Copy failed (browser permissions)."));
+      }
+
+      async function copyRich() {
+        try {
+          if (navigator.clipboard && window.ClipboardItem) {
+            const item = new ClipboardItem({
+              'text/html': new Blob([outputHTML], { type: 'text/html' }),
+              'text/plain': new Blob([output], { type: 'text/plain' }),
+            });
+            await navigator.clipboard.write([item]);
+            alert('Copied with rich formatting (H2 headings)!');
+          } else {
+            await navigator.clipboard.writeText(output);
+            alert('Rich clipboard not supported; copied plain text instead.');
+          }
+        } catch (e) {
+          console.error(e);
+          alert('Copy failed. Check browser permissions.');
+        }
+      }
+
+      async function copyMarkdown() {
+        try {
+          await navigator.clipboard.writeText(outputMD);
+          alert('Copied Markdown (## as Heading 2).');
+        } catch (e) {
+          console.error(e);
+          alert('Copy failed (browser permissions).');
+        }
       }
 
       function downloadTxt() {
@@ -241,7 +424,7 @@
       function resetAll() {
         if (!confirm("Clear all fields?")) return;
         setName(""); setQuote(""); setRole("Survivor"); setSurvivorType("Sustain"); setKillerStyle("Rushdown");
-        setCost(0); setDescription(""); setDifficulty(3); setStats(defaultStats);
+        setCost(0); setDescription(""); setDifficulty(3); setStats(survivorDefaults);
         setHasPassive(false); setPassiveName(""); setPassiveDesc("");
         setM1Name(""); setM1CD(2); setM1Desc("");
         setAbilityCount(1);
@@ -270,7 +453,7 @@
                   <input type="number" min="0" className="border rounded-lg px-3 py-2" value={cost} onChange={e=>setCost(Number(e.target.value))} />
                 </L>
                 <L label="Role">
-                  <select className="border rounded-lg px-3 py-2" value={role} onChange={e=>setRole(e.target.value)}>
+                  <select className=\"border rounded-lg px-3 py-2\" value={role} onChange={e=>{ const r = e.target.value; setRole(r); setStats(r === 'Survivor' ? survivorDefaults : killerDefaults); }}>
                     <option>Survivor</option>
                     <option>Killer</option>
                   </select>
@@ -290,7 +473,7 @@
 
             <Section title="Description & Difficulty">
               <L label="Description">
-                <textarea className="border rounded-lg px-3 py-2 min-h-[120px]" value={description} onChange={e=>setDescription(e.target.value)} placeholder="Brief description" />
+                <textarea className=\"border rounded-lg px-3 py-2 min-h-[240px] md:min-h-[280px]\" value={description} onChange={e=>setDescription(e.target.value)} placeholder="Brief description" />
               </L>
               <div className="flex items-center gap-4">
                 <L label={`Difficulty (${difficulty} star${difficulty==1?'':'s'})`}>
@@ -301,25 +484,30 @@
             </Section>
 
             <Section title="Core Stats (with defaults)">
-              <div className="grid md:grid-cols-3 gap-4">
-                <L label="Health (default 5000)">
-                  <input type="number" className="border rounded-lg px-3 py-2" value={stats.health} onChange={e=>updateStat('health', Number(e.target.value))} />
+              <div className=\"grid md:grid-cols-3 gap-4\">
+                <L label=\"Health (default varies by role)\">
+                  <input type=\"number\" className=\"border rounded-lg px-3 py-2\" value={stats.health} onChange={e=>updateStat('health', Number(e.target.value))} />
                 </L>
-                <L label="Stamina (default 100)">
-                  <input type="number" className="border rounded-lg px-3 py-2" value={stats.stamina} onChange={e=>updateStat('stamina', Number(e.target.value))} />
+                <L label=\"Stamina (default varies by role)\">
+                  <input type=\"number\" className=\"border rounded-lg px-3 py-2\" value={stats.stamina} onChange={e=>updateStat('stamina', Number(e.target.value))} />
                 </L>
-                <L label="Stamina gain/sec (default 21)">
-                  <input type="number" step="0.1" className="border rounded-lg px-3 py-2" value={stats.staminaGain} onChange={e=>updateStat('staminaGain', Number(e.target.value))} />
+                <L label=\"Stamina gain/sec (default varies by role)\">
+                  <input type=\"number\" step=\"0.1\" className=\"border rounded-lg px-3 py-2\" value={stats.staminaGain} onChange={e=>updateStat('staminaGain', Number(e.target.value))} />
                 </L>
-                <L label="Stamina drain/sec (default 9.5)">
-                  <input type="number" step="0.1" className="border rounded-lg px-3 py-2" value={stats.staminaDrain} onChange={e=>updateStat('staminaDrain', Number(e.target.value))} />
+                <L label=\"Stamina drain/sec (default varies by role)\">
+                  <input type=\"number\" step=\"0.1\" className=\"border rounded-lg px-3 py-2\" value={stats.staminaDrain} onChange={e=>updateStat('staminaDrain', Number(e.target.value))} />
                 </L>
-                <L label="Walkspeed (default 8)">
-                  <input type="number" step="0.1" className="border rounded-lg px-3 py-2" value={stats.walkspeed} onChange={e=>updateStat('walkspeed', Number(e.target.value))} />
+                <L label=\"Walkspeed (default varies by role)\">
+                  <input type=\"number\" step=\"0.1\" className=\"border rounded-lg px-3 py-2\" value={stats.walkspeed} onChange={e=>updateStat('walkspeed', Number(e.target.value))} />
                 </L>
-                <L label="Sprint speed (default 28)">
-                  <input type="number" step="0.1" className="border rounded-lg px-3 py-2" value={stats.sprintspeed} onChange={e=>updateStat('sprintspeed', Number(e.target.value))} />
+                <L label=\"Sprint speed (default varies by role)\">
+                  <input type=\"number\" step=\"0.1\" className=\"border rounded-lg px-3 py-2\" value={stats.sprintspeed} onChange={e=>updateStat('sprintspeed', Number(e.target.value))} />
                 </L>
+                {role === 'Killer' && (
+                  <L label=\"Terror radius (studs) (default 60)\">
+                    <input type=\"number\" step=\"1\" className=\"border rounded-lg px-3 py-2\" value={stats.terror} onChange={e=>updateStat('terror', Number(e.target.value))} />
+                  </L>
+                )}
               </div>
             </Section>
 
@@ -337,13 +525,22 @@
             </Section>
 
             {role === 'Killer' && (
-              <Section title="M1 Attack (Killers)">
-                <div className="grid md:grid-cols-3 gap-4">
-                  <L label="M1 Name"><input className="border rounded-lg px-3 py-2" value={m1Name} onChange={e=>setM1Name(e.target.value)} /></L>
-                  <L label="Cooldown (s)" help="Default 2s">
-                    <input type="number" step="0.1" className="border rounded-lg px-3 py-2" value={m1CD} onChange={e=>setM1CD(Number(e.target.value))} />
+              <Section title=\"M1 Attack (Killers)\">
+                <div className=\"grid md:grid-cols-5 gap-4\">
+                  <L label=\"M1 Name\"><input className=\"border rounded-lg px-3 py-2\" value={m1Name} onChange={e=>setM1Name(e.target.value)} /></L>
+                  <L label=\"Cooldown (s)\" help=\"Default 2s\">
+                    <input type=\"number\" step=\"0.1\" className=\"border rounded-lg px-3 py-2\" value={m1CD} onChange={e=>setM1CD(Number(e.target.value))} />
                   </L>
-                  <L label="Description"><input className="border rounded-lg px-3 py-2" value={m1Desc} onChange={e=>setM1Desc(e.target.value)} /></L>
+                  <L label=\"Windup (s)\" help=\"Default 0.2s\">
+                    <input type=\"number\" step=\"0.05\" className=\"border rounded-lg px-3 py-2\" value={m1Windup} onChange={e=>setM1Windup(Number(e.target.value))} />
+                  </L>
+                  <L label=\"Damage\" help=\"Default 20\">
+                    <input type=\"number\" step=\"1\" className=\"border rounded-lg px-3 py-2\" value={m1Damage} onChange={e=>setM1Damage(Number(e.target.value))} />
+                  </L>
+                  <L label=\"Linger (s)\" help=\"Default 0.25s\">
+                    <input type=\"number\" step=\"0.05\" className=\"border rounded-lg px-3 py-2\" value={m1Linger} onChange={e=>setM1Linger(Number(e.target.value))} />
+                  </L>
+                  <L label=\"Description\" ><input className=\"border rounded-lg px-3 py-2 md:col-span-5\" value={m1Desc} onChange={e=>setM1Desc(e.target.value)} /></L>
                 </div>
               </Section>
             )}
@@ -361,10 +558,19 @@
                 {abilities.slice(0, abilityCount).map((a, i) => (
                   <div key={i} className="rounded-xl border border-stone-200 p-4">
                     <h3 className="font-semibold mb-3">{abilityLabels[i]} Ability</h3>
-                    <div className="grid md:grid-cols-3 gap-4">
-                      <L label="Name"><input className="border rounded-lg px-3 py-2" value={a.name} onChange={e=>handleAbilityChange(i, 'name', e.target.value)} /></L>
-                      <L label="Cooldown (s)"><input type="number" step="0.1" className="border rounded-lg px-3 py-2" value={a.cd} onChange={e=>handleAbilityChange(i, 'cd', e.target.value)} /></L>
-                      <L label="Description"><input className="border rounded-lg px-3 py-2" value={a.desc} onChange={e=>handleAbilityChange(i, 'desc', e.target.value)} /></L>
+                    <div className=\"grid md:grid-cols-3 gap-4\">
+                      <L label=\"Name\"><input className=\"border rounded-lg px-3 py-2\" value={a.name} onChange={e=>handleAbilityChange(i, 'name', e.target.value)} /></L>
+                      <L label=\"Cooldown (s)\"><input type=\"number\" step=\"0.1\" className=\"border rounded-lg px-3 py-2\" value={a.cd} onChange={e=>handleAbilityChange(i, 'cd', e.target.value)} /></L>
+                      <L label=\"Description\"><input className=\"border rounded-lg px-3 py-2\" value={a.desc} onChange={e=>handleAbilityChange(i, 'desc', e.target.value)} /></L>
+                    </div>
+                    <div className=\"flex items-center gap-3 mt-2\">
+                      <input id=\"hasDamage-{i}\" type=\"checkbox\" className=\"h-4 w-4\" checked={a.hasDamage} onChange={e=>handleAbilityChange(i, 'hasDamage', e.target.checked)} />
+                      <label htmlFor=\"hasDamage-{i}\" className=\"text-sm\">This ability deals damage</label>
+                      {a.hasDamage && (
+                        <L label=\"Damage\">
+                          <input type=\"number\" step=\"1\" className=\"border rounded-lg px-3 py-2\" value={a.damage} onChange={e=>handleAbilityChange(i, 'damage', Number(e.target.value))} />
+                        </L>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -399,9 +605,11 @@
             </Section>
 
             <Section title="Generated Template">
-              <div className="flex flex-wrap gap-3 mb-2">
-                <button onClick={copyToClipboard} className="px-4 py-2 rounded-lg bg-stone-900 text-white hover:opacity-90">Copy</button>
-                <button onClick={downloadTxt} className="px-4 py-2 rounded-lg border border-stone-300 hover:bg-stone-100">Download .txt</button>
+              <div className=\"flex flex-wrap gap-3 mb-2\">
+                <button onClick={copyRich} className=\"px-4 py-2 rounded-lg bg-stone-900 text-white hover:opacity-90\">Copy (rich HTML)</button>
+                <button onClick={copyMarkdown} className=\"px-4 py-2 rounded-lg border border-stone-300 hover:bg-stone-100\">Copy (Markdown)</button>
+                <button onClick={copyToClipboard} className=\"px-4 py-2 rounded-lg border border-stone-300 hover:bg-stone-100\">Copy (plain)</button>
+                <button onClick={downloadTxt} className=\"px-4 py-2 rounded-lg border border-stone-300 hover:bg-stone-100\">Download .txt</button>
               </div>
               <pre className="mono whitespace-pre-wrap bg-stone-900 text-stone-100 rounded-xl p-4 overflow-auto max-h-[50vh]">{output}</pre>
             </Section>
